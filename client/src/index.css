@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0b;
+  --color-panel: #161618;
+  --color-accent: #3e63dd;
+}
+
+body {
+  @apply bg-background text-white antialiased;
+}
+
+.glass {
+  @apply bg-panel/60 backdrop-blur-md border border-white/10;
+}
