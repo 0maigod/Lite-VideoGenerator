@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { ImagePlus, Send, Loader2, Sparkles } from 'lucide-react';
+import { ImagePlus, Send, Loader2, Sparkles, Wand2 } from 'lucide-react';
 
 function App() {
     const [prompt, setPrompt] = useState('');
     const [image, setImage] = useState(null);
     const [imagePreview, setImagePreview] = useState(null);
+    const [isEditing, setIsEditing] = useState(false);
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
     const [originalText, setOriginalText] = useState(null);
@@ -35,6 +36,7 @@ function App() {
 
         const formData = new FormData();
         formData.append('prompt', prompt);
+        formData.append('isEditing', isEditing);
         if (image) {
             formData.append('image', image);
         }
@@ -85,18 +87,41 @@ function App() {
             <main className="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <section className="space-y-6">
                     <form onSubmit={handleSubmit} className="bg-slate-900/50 p-6 rounded-2xl border border-white/10 space-y-4">
+
+                        {/* Action Mode Toggle */}
+                        <div className="flex bg-slate-800 p-1 rounded-xl">
+                            <button
+                                type="button"
+                                onClick={() => setIsEditing(false)}
+                                className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${!isEditing ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                Generar desde cero
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setIsEditing(true)}
+                                className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${isEditing ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                Editar Imagen
+                            </button>
+                        </div>
+
                         <div>
-                            <label className="block text-sm font-medium text-slate-300 mb-2">Prompt</label>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">
+                                {isEditing ? "Prompt de Edición (Ej: ponle un sombrero)" : "Prompt de Generación"}
+                            </label>
                             <textarea
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
-                                placeholder="Un astronauta cabalgando un unicornio en Marte, estilo digital art..."
-                                className="w-full h-32 bg-slate-800 border-white/5 rounded-xl p-4 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-500"
+                                placeholder={isEditing ? "Añádele lentes de sol virtuales..." : "Un astronauta cabalgando un unicornio en Marte..."}
+                                className="w-full h-32 bg-slate-800 border-white/5 rounded-xl p-4 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-500 resize-none"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-slate-300 mb-2 text-wrap">Imagen de Referencia (Opcional)</label>
+                            <label className="block text-sm font-medium text-slate-300 mb-2 text-wrap">
+                                {isEditing ? "Sube la imagen que quieres modificar (Requerido) *" : "Imagen de Referencia (Opcional)"}
+                            </label>
                             <div className="relative group">
                                 <input
                                     type="file"
@@ -123,15 +148,15 @@ function App() {
 
                         <button
                             type="submit"
-                            disabled={loading || !prompt}
-                            className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors overflow-hidden"
+                            disabled={loading || !prompt || (isEditing && !image)}
+                            className={`w-full py-4 disabled:bg-slate-800 disabled:text-slate-500 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors overflow-hidden ${isEditing ? 'bg-purple-600 hover:bg-purple-500' : 'bg-blue-600 hover:bg-blue-500'}`}
                         >
                             {loading ? (
                                 <Loader2 className="w-5 h-5 animate-spin" />
                             ) : (
                                 <>
-                                    <Sparkles className="w-5 h-5" />
-                                    Generar Imagen
+                                    {isEditing ? <Wand2 className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                                    {isEditing ? "Editar Imagen" : "Generar Imagen"}
                                 </>
                             )}
                         </button>

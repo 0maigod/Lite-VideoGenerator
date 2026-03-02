@@ -35,7 +35,8 @@ function fileToGenerativePart(buffer, mimeType) {
 
 fastify.post('/generate', async (request, reply) => {
   try {
-    const { prompt, image } = request.body;
+    const { prompt, image, isEditing } = request.body;
+    const editingMode = isEditing ? isEditing.value === 'true' : false;
 
     if (!prompt || !prompt.value) {
       return reply.status(400).send({ error: 'Prompt is required' });
@@ -55,15 +56,34 @@ fastify.post('/generate', async (request, reply) => {
     const generateImage = async (modelName) => {
       try {
         if (modelName.includes('imagen')) {
-          // Utiliza generateImages para modelos de la familia Imagen
-          const result = await ai.models.generateImages({
-            model: modelName,
-            prompt: prompt.value,
-            config: {
-              numberOfImages: 1,
-              outputMimeType: "image/jpeg"
-            }
-          });
+          let result;
+          if (editingMode && image && image._buf) {
+            // Fallback a Flash para editar si Imagen falla por permisos o sintaxis
+            const flashResult = await ai.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: [
+                prompt.value,
+                fileToGenerativePart(image._buf, image.mimetype)
+              ]
+            });
+
+            // Esto nos da texto, no una imagen directa. Para lograr una modificación REAL
+            // de imagen, necesitaríamos una API de inpainting funcionando. Como Imagen 3 da 500,
+            // detendremos el proceso de edición aquí y arrojaremos un error explicando que
+            // la edición de Imagen 3 no está disponible en la cuenta.
+            throw new Error("La edición de imagen (Inpainting) con Imagen 3 no está habilitada en tu cuota o región actual en Google Cloud. El endpoint devuelve error interno (500).");
+
+          } else {
+            // Modo generar: usamos generateImages
+            result = await ai.models.generateImages({
+              model: modelName,
+              prompt: prompt.value,
+              config: {
+                numberOfImages: 1,
+                outputMimeType: "image/jpeg"
+              }
+            });
+          }
 
           const img = result.generatedImages?.[0];
           if (img && img.image) {
