@@ -58,20 +58,38 @@ fastify.post('/generate', async (request, reply) => {
         if (modelName.includes('imagen')) {
           let result;
           if (editingMode && image && image._buf) {
-            // Fallback a Flash para editar si Imagen falla por permisos o sintaxis
-            const flashResult = await ai.models.generateContent({
-              model: 'gemini-2.5-flash',
+            // Utilizamos el modelo recomendado para Image-to-Image / Inpainting
+            const editModel = 'gemini-3-pro-image-preview';
+            console.log(`Ejecutando edición de imagen con ${editModel}`);
+
+            result = await ai.models.generateContent({
+              model: editModel,
               contents: [
-                prompt.value,
-                fileToGenerativePart(image._buf, image.mimetype)
-              ]
+                {
+                  role: 'user',
+                  parts: [
+                    fileToGenerativePart(image._buf, image.mimetype),
+                    { text: prompt.value }
+                  ]
+                }
+              ],
+              config: {
+                responseModalities: ['IMAGE'],
+              }
             });
 
-            // Esto nos da texto, no una imagen directa. Para lograr una modificación REAL
-            // de imagen, necesitaríamos una API de inpainting funcionando. Como Imagen 3 da 500,
-            // detendremos el proceso de edición aquí y arrojaremos un error explicando que
-            // la edición de Imagen 3 no está disponible en la cuenta.
-            throw new Error("La edición de imagen (Inpainting) con Imagen 3 no está habilitada en tu cuota o región actual en Google Cloud. El endpoint devuelve error interno (500).");
+            const imagePart = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+            if (imagePart && imagePart.inlineData) {
+              const imageData = imagePart.inlineData.data;
+              const mimeType = imagePart.inlineData.mimeType;
+              return {
+                model: editModel,
+                success: true,
+                data: `data:${mimeType};base64,${imageData}`
+              };
+            }
+            throw new Error(`El modelo ${editModel} no devolvió ninguna imagen generada.`);
 
           } else {
             // Modo generar: usamos generateImages
@@ -83,19 +101,20 @@ fastify.post('/generate', async (request, reply) => {
                 outputMimeType: "image/jpeg"
               }
             });
+
+            const img = result.generatedImages?.[0];
+            if (img && img.image) {
+              return {
+                model: modelName,
+                success: true,
+                data: `data:${img.image.mimeType || 'image/jpeg'};base64,${img.image.imageBytes}`
+              };
+            }
+            throw new Error("El modelo de Imagen no devolvió datos requeridos.");
           }
 
-          const img = result.generatedImages?.[0];
-          if (img && img.image) {
-            return {
-              model: modelName,
-              success: true,
-              data: `data:${img.image.mimeType || 'image/jpeg'};base64,${img.image.imageBytes}`
-            };
-          }
-          throw new Error("El modelo de Imagen no devolvió datos requeridos.");
         } else {
-          // Utiliza generateContent para modelos Gemini textuales / vision
+          // Utiliza generateContent para modelos Gemini textuales / vision (como flash fallback)
           const result = await ai.models.generateContent({
             model: modelName,
             contents: promptParts
