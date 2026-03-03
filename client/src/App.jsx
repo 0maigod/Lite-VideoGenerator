@@ -3,8 +3,8 @@ import { ImagePlus, Send, Loader2, Sparkles, Wand2, Eraser, Brush, X, Download }
 
 function App() {
     const [prompt, setPrompt] = useState('');
-    const [image, setImage] = useState(null);
-    const [imagePreview, setImagePreview] = useState(null);
+    const [images, setImages] = useState([]);
+    const [imagePreviews, setImagePreviews] = useState([]);
     const [isEditing, setIsEditing] = useState(false);
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
@@ -20,7 +20,7 @@ function App() {
 
     // Initialize/Resize canvas when image preview changes or window resizes
     useEffect(() => {
-        if (isEditing && imagePreview && containerRef.current && canvasRef.current) {
+        if (isEditing && imagePreviews.length > 0 && containerRef.current && canvasRef.current) {
             const container = containerRef.current;
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d');
@@ -39,7 +39,7 @@ function App() {
                 }
             }, 50);
         }
-    }, [imagePreview, isEditing]);
+    }, [imagePreviews, isEditing]);
 
     const startDrawing = (e) => {
         if (!isEditing || !canvasRef.current) return;
@@ -134,51 +134,139 @@ function App() {
     };
 
     const handleImageChange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            setImage(file);
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setImagePreview(reader.result);
-            };
-            reader.readAsDataURL(file);
+        const files = Array.from(e.target.files);
+        if (files.length > 0) {
+            let selectedFiles;
+
+            if (isEditing) {
+                // In editing mode, we only explicitly support 1 base image and ALWAYS replace it
+                selectedFiles = [files[0]];
+            } else {
+                // In generation mode, append new files to existing ones up to max of 3
+                const maxAllowed = 3 - images.length;
+                if (maxAllowed <= 0) {
+                    alert("Ya has alcanzado el límite máximo de 3 imágenes de referencia.");
+                    return;
+                }
+
+                const filesToAdd = files.slice(0, maxAllowed);
+                if (files.length > maxAllowed) {
+                    alert(`Solo se pudieron añadir ${maxAllowed} imagen(es) para no exceder el límite de 3.`);
+                }
+                selectedFiles = [...images, ...filesToAdd];
+            }
+
+            setImages(selectedFiles);
+
+            // Re-generate previews for all files (both old and new to keep it simple and synced)
+            const newPreviews = [];
+            let loadedCount = 0;
+
+            selectedFiles.forEach((file, index) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    newPreviews[index] = reader.result;
+                    loadedCount++;
+                    if (loadedCount === selectedFiles.length) {
+                        setImagePreviews(newPreviews);
+                    }
+                };
+                reader.readAsDataURL(file);
+            });
+
+            // Clear the file input so the user can select the same file again if they want
+            if (e.target) e.target.value = '';
         }
     };
 
-    const handleRemoveImage = () => {
-        setImage(null);
-        setImagePreview(null);
-        if (canvasRef.current) {
+    const handleRemoveImage = (indexToRemove) => {
+        const newImages = images.filter((_, idx) => idx !== indexToRemove);
+        const newPreviews = imagePreviews.filter((_, idx) => idx !== indexToRemove);
+
+        setImages(newImages);
+        setImagePreviews(newPreviews);
+
+        if (newImages.length === 0 && canvasRef.current) {
             const canvas = canvasRef.current;
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            const fileInput = document.getElementById('image-upload');
+            if (fileInput) fileInput.value = '';
         }
-        // Reset file input if needed
-        const fileInput = document.getElementById('image-upload');
-        if (fileInput) fileInput.value = '';
     };
 
-    const handleDownload = () => {
+    const handleDownload = async () => {
         if (!result) return;
 
-        // Convert Base64 data URI to a Blob to prevent corrupted downloads in some browsers
-        const arr = result.split(',');
-        const mime = arr[0].match(/:(.*?);/)[1];
-        const bstr = atob(arr[1]);
-        let n = bstr.length;
-        const u8arr = new Uint8Array(n);
-        while (n--) {
-            u8arr[n] = bstr.charCodeAt(n);
-        }
-        const blob = new Blob([u8arr], { type: mime });
-        const url = URL.createObjectURL(blob);
+        try {
+            // 1. Extraer el base64 puro y su mimeType de un string tipo "data:image/jpeg;base64,....."
+            const arr = result.split(',');
+            const mimeMatch = arr[0].match(/:(.*?);/);
 
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `gemini-imagen-${Date.now()}.jpg`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url); // Clean up memory
+            if (!mimeMatch || arr.length !== 2) {
+                console.error("Formato de imagen inválido");
+                return;
+            }
+
+            const mimeType = mimeMatch[1]; // ej. "image/jpeg" o "image/png"
+            const b64Data = arr[1];
+
+            // Extraer extensión dinámica basada en el mimeType
+            // Si el mimeType es image/png, guardará '.png', por defecto '.jpg'
+            const extension = mimeType.split('/')[1] || 'jpg';
+
+            // 2. Convertir Base64 a un Blob (mejor rendimiento para imágenes 4K)
+            const byteCharacters = atob(b64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: mimeType });
+
+            // 3. Intentar usar File System Access API para elegir DONDE guardar
+            if ('showSaveFilePicker' in window) {
+                try {
+                    const opts = {
+                        suggestedName: `gemini-imagen.${extension}`,
+                        types: [{
+                            description: 'Imagen Generada por Gemini',
+                            accept: { [mimeType]: [`.${extension}`] },
+                        }],
+                    };
+                    // Mostrar diálogo "Guardar como..."
+                    const handle = await window.showSaveFilePicker(opts);
+                    // Escribir el blob al archivo
+                    const writable = await handle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    return; // Terminamos con éxito
+                } catch (err) {
+                    // Si el error es AbortError, el usuario canceló la ventana. No hacemos nada.
+                    if (err.name === 'AbortError') return;
+                    console.error("Falló showSaveFilePicker. Usando fallback tradicional...", err);
+                    // Si falla por otra razón (ej. falta de soporte real), dejamos caer al fallback de abajo
+                }
+            }
+
+            // 4. Fallback tradicional (Descarga automática) para navegadores no compatibles (ej. Firefox)
+            const blobUrl = URL.createObjectURL(blob);
+
+            // Iniciar descarga forzada con nombre dinámico
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.setAttribute('download', `gemini-imagen.${extension}`);
+
+            document.body.appendChild(link);
+            link.click();
+
+            // Limpiar el DOM y liberar la memoria RAM
+            document.body.removeChild(link);
+            URL.revokeObjectURL(blobUrl);
+
+        } catch (error) {
+            console.error("Error procesando la descarga:", error);
+            setError("No se pudo descargar la imagen correctamente.");
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -195,11 +283,12 @@ function App() {
         const formData = new FormData();
         formData.append('prompt', prompt);
         formData.append('isEditing', isEditing);
-        if (image) {
-            formData.append('image', image);
-        }
 
-        if (isEditing && image && canvasRef.current) {
+        images.forEach((img) => {
+            formData.append('images', img);
+        });
+
+        if (isEditing && images.length > 0 && canvasRef.current) {
             const maskBase64 = generateMaskBase64();
             if (maskBase64) {
                 formData.append('mask', maskBase64);
@@ -257,7 +346,13 @@ function App() {
                         <div className="flex bg-slate-800 p-1 rounded-xl">
                             <button
                                 type="button"
-                                onClick={() => setIsEditing(false)}
+                                onClick={() => {
+                                    setIsEditing(false);
+                                    if (images.length > 0 && canvasRef.current) {
+                                        const canvas = canvasRef.current;
+                                        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+                                    }
+                                }}
                                 className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${!isEditing ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
                             >
                                 Generar desde cero
@@ -285,28 +380,31 @@ function App() {
 
                         <div>
                             <label className="block text-sm font-medium text-slate-300 mb-2 text-wrap">
-                                {isEditing ? "Sube la imagen que quieres modificar (Requerido) *" : "Imagen de Referencia (Opcional)"}
+                                {isEditing ? "Sube la imagen que quieres modificar (Requerido) *" : "Imágenes de Referencia Múltiples (Opcional)"}
                             </label>
                             <div className="relative group">
                                 <input
                                     type="file"
+                                    multiple={!isEditing}
                                     onChange={handleImageChange}
                                     accept="image/*"
                                     className="hidden"
                                     id="image-upload"
                                 />
-                                {imagePreview ? (
-                                    <div className="space-y-4">
-                                        <div
-                                            ref={containerRef}
-                                            className="relative flex justify-center bg-black/20 rounded-xl overflow-hidden touch-none group/preview"
-                                        >
-                                            <img
-                                                src={imagePreview}
-                                                alt="Preview"
-                                                className="max-h-[50vh] w-auto object-contain pointer-events-none"
-                                            />
-                                            {isEditing && (
+                                {isEditing ? (
+                                    /* --- MODO EDICIÓN --- */
+                                    imagePreviews.length > 0 ? (
+                                        <div className="space-y-4">
+                                            {/* Main Preview (First Image or Canvas Base) */}
+                                            <div
+                                                ref={containerRef}
+                                                className="relative flex justify-center bg-black/20 rounded-xl overflow-hidden touch-none group/preview"
+                                            >
+                                                <img
+                                                    src={imagePreviews[0]}
+                                                    alt="Main Preview"
+                                                    className="max-h-[50vh] w-auto object-contain pointer-events-none"
+                                                />
                                                 <canvas
                                                     ref={canvasRef}
                                                     onMouseDown={startDrawing}
@@ -320,21 +418,17 @@ function App() {
                                                     className="absolute top-0 left-1/2 -translate-x-1/2 h-full z-10 cursor-crosshair touch-none"
                                                     style={{ maxWidth: '100%', objectFit: 'contain' }}
                                                 />
-                                            )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveImage(0)}
+                                                    className="absolute top-3 right-3 p-1.5 bg-black/40 hover:bg-red-500/90 text-white/80 hover:text-white rounded-full backdrop-blur-md opacity-0 group-hover/preview:opacity-100 transition-all z-20 shadow-sm"
+                                                    title="Quitar imagen principal"
+                                                >
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </div>
 
-                                            {/* Remove Image Button */}
-                                            <button
-                                                type="button"
-                                                onClick={handleRemoveImage}
-                                                className="absolute top-3 right-3 p-1.5 bg-black/40 hover:bg-red-500/90 text-white/80 hover:text-white rounded-full backdrop-blur-md opacity-0 group-hover/preview:opacity-100 transition-all z-20 shadow-sm"
-                                                title="Quitar imagen"
-                                            >
-                                                <X className="w-4 h-4" />
-                                            </button>
-                                        </div>
-
-                                        {/* Drawing Tools (Only in Editing Mode) */}
-                                        {isEditing && (
+                                            {/* Drawing Tools */}
                                             <div className="flex flex-wrap items-center gap-4 bg-slate-800/50 p-3 rounded-xl border border-white/5">
                                                 <div className="flex bg-slate-800 rounded-lg p-1">
                                                     <button
@@ -380,32 +474,65 @@ function App() {
                                                     Limpiar Máscara
                                                 </button>
                                             </div>
-                                        )}
 
-                                        <div className="flex justify-center">
-                                            <label
-                                                htmlFor="image-upload"
-                                                className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer underline underline-offset-4 decoration-white/20"
-                                            >
-                                                Cambiar imagen
-                                            </label>
+                                            <div className="flex justify-center">
+                                                <label
+                                                    htmlFor="image-upload"
+                                                    className="text-sm text-blue-400 hover:text-blue-300 cursor-pointer underline underline-offset-4 decoration-white/20"
+                                                >
+                                                    Cambiar imagen
+                                                </label>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <label
+                                            htmlFor="image-upload"
+                                            className="flex flex-col items-center justify-center w-full h-40 bg-slate-800 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-slate-800/80 hover:border-blue-500/50 transition-all overflow-hidden"
+                                        >
+                                            <ImagePlus className="w-8 h-8 text-slate-500 mb-2" />
+                                            <span className="text-slate-500 text-sm">Haz clic para subir imagen original</span>
+                                        </label>
+                                    )
+                                ) : (
+                                    /* --- MODO GENERACIÓN --- */
+                                    <div className="flex flex-col gap-2 w-full mt-2">
+                                        <span className="text-xs text-slate-500 font-medium px-1">
+                                            Referencias (Máx. 3 imágenes)
+                                        </span>
+                                        <div className="flex flex-wrap gap-4 p-4 bg-slate-800/50 rounded-xl border border-white/5 w-full min-h-[144px]">
+                                            {/* Mostrar las miniaturas seleccionadas */}
+                                            {imagePreviews.map((preview, idx) => (
+                                                <div key={idx} className="relative group/thumb w-28 h-28 rounded-lg overflow-hidden border-2 border-slate-700 hover:border-blue-500 transition-colors bg-slate-900 border-dashed">
+                                                    <img src={preview} alt={`Thumb ${idx}`} className="w-full h-full object-cover" />
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleRemoveImage(idx);
+                                                        }}
+                                                        className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500 text-white rounded-full backdrop-blur-md opacity-0 group-hover/thumb:opacity-100 transition-all z-20"
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                </div>
+                                            ))}
+
+                                            {/* Botón para agregar más (con tamaño igual a las miniaturas y centrado) */}
+                                            {imagePreviews.length < 3 && (
+                                                <label htmlFor="image-upload" className="flex flex-col items-center justify-center w-28 h-28 bg-slate-800 rounded-lg border-2 border-dashed border-slate-600 hover:border-slate-400 cursor-pointer transition-colors shrink-0">
+                                                    <ImagePlus className="w-6 h-6 text-slate-400 mb-1" />
+                                                    <span className="text-xs text-slate-500 leading-tight text-center px-1">Subir ({imagePreviews.length}/3)</span>
+                                                </label>
+                                            )}
                                         </div>
                                     </div>
-                                ) : (
-                                    <label
-                                        htmlFor="image-upload"
-                                        className="flex flex-col items-center justify-center w-full h-40 bg-slate-800 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-slate-800/80 hover:border-blue-500/50 transition-all overflow-hidden"
-                                    >
-                                        <ImagePlus className="w-8 h-8 text-slate-500 mb-2" />
-                                        <span className="text-slate-500 text-sm">Haz clic para subir imagen</span>
-                                    </label>
                                 )}
                             </div>
                         </div>
 
                         <button
                             type="submit"
-                            disabled={loading || !prompt || (isEditing && !image)}
+                            disabled={loading || !prompt || (isEditing && images.length === 0)}
                             className={`w-full py-4 disabled:bg-slate-800 disabled:text-slate-500 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors overflow-hidden ${isEditing ? 'bg-purple-600 hover:bg-purple-500' : 'bg-blue-600 hover:bg-blue-500'}`}
                         >
                             {loading ? (

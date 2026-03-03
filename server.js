@@ -35,64 +35,119 @@ function fileToGenerativePart(buffer, mimeType) {
 
 fastify.post('/generate', async (request, reply) => {
   try {
-    const { prompt, image, isEditing } = request.body;
+    const { prompt, images, mask, isEditing } = request.body;
     const editingMode = isEditing ? isEditing.value === 'true' : false;
 
     if (!prompt || !prompt.value) {
       return reply.status(400).send({ error: 'Prompt is required' });
     }
 
-    // Because the public Gemini API might not have access to Imagen 3 via standard REST
-    // without Vertex AI, we will use a text model just to test the integration flow.
-    // If you have Nano Banana (Imagen 3) access, the endpoint might be slightly different.
-
     let promptParts = [prompt.value];
 
-    if (image && image.mimetype && image._buf) {
-      promptParts.push(fileToGenerativePart(image._buf, image.mimetype));
+    // Fastify-multipart makes 'images' either an object (if 1 file) or an array (if multiple)
+    let uploadedImages = [];
+    if (images) {
+      console.log('Detectado campo images en body. Tipo:', Array.isArray(images) ? 'Array' : typeof images);
+      uploadedImages = Array.isArray(images) ? images : [images];
+    } else {
+      console.log('No se detectó campo images en request.body');
     }
+
+    console.log(`Procesando ${uploadedImages.length} imágenes adjuntas`);
+
+    uploadedImages.forEach((img, idx) => {
+      if (img && img.mimetype && img._buf) {
+        console.log(`Imagen ${idx}: validada (${img.mimetype}), buffer de ${img._buf.length} bytes`);
+        promptParts.push(fileToGenerativePart(img._buf, img.mimetype));
+      } else {
+        console.log(`Imagen ${idx}: inválida o sin buffer`);
+      }
+    });
+
+    // For backwards compatibility with the edit workflow which expects exactly 1 base image
+    const baseImage = uploadedImages.length > 0 ? uploadedImages[0] : null;
 
     // Wrap the generation call to extract the base64 image or handle text fallbacks if they behave differently
     const generateImage = async (modelName) => {
       try {
         if (modelName.includes('imagen')) {
           let result;
-          if (editingMode && image && image._buf) {
-            // Utilizamos el modelo recomendado para Image-to-Image / Inpainting
-            const editModel = 'gemini-3-pro-image-preview';
+          if (editingMode && baseImage && baseImage._buf) {
+            // Utilizamos el modelo de Imagen para Image-to-Image / Inpainting clásico
+            const editModel = 'imagen-3.0-generate-001';
             console.log(`Ejecutando edición de imagen con ${editModel}`);
 
-            result = await ai.models.generateContent({
+            const config = {
+              numberOfImages: 1,
+              outputMimeType: "image/jpeg",
+              editMode: "INPAINT_INSERT"
+            };
+
+            // If a mask was provided from the frontend canvas, apply it
+            if (mask && mask.value) {
+              // Remove the "data:image/jpeg;base64," prefix from the string
+              const maskBase64 = mask.value.replace(/^data:image\/[a-z]+;base64,/, "");
+              config.mask = {
+                mimeType: "image/jpeg",
+                bytes: maskBase64
+              };
+            }
+
+            result = await ai.models.editImage({
               model: editModel,
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    fileToGenerativePart(image._buf, image.mimetype),
-                    { text: prompt.value }
-                  ]
-                }
-              ],
-              config: {
-                responseModalities: ['IMAGE'],
-              }
+              prompt: prompt.value,
+              referenceImage: {
+                mimeType: image.mimetype,
+                bytes: image._buf.toString('base64')
+              },
+              config: config
             });
 
-            const imagePart = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+            const img = result.generatedImages?.[0];
 
-            if (imagePart && imagePart.inlineData) {
-              const imageData = imagePart.inlineData.data;
-              const mimeType = imagePart.inlineData.mimeType;
+            if (img && img.image) {
               return {
                 model: editModel,
                 success: true,
-                data: `data:${mimeType};base64,${imageData}`
+                data: `data:${img.image.mimeType || 'image/jpeg'};base64,${img.image.imageBytes}`
               };
             }
-            throw new Error(`El modelo ${editModel} no devolvió ninguna imagen generada.`);
+            throw new Error(`El modelo ${editModel} no devolvió ninguna imagen editada.`);
+
+          } else if (uploadedImages.length > 0) {
+            // Generación base pero con referencias. Imagen 3 las ignora, así que usamos 
+            // el nuevo modelo multimodal Gemini 3 Pro forzando responseModalities
+            console.log(`Múltiples referencias detectadas. Cambiando a gemini-3-pro-image-preview...`);
+            const fallbackModel = 'gemini-3-pro-image-preview';
+
+            const fallbackResult = await ai.models.generateContent({
+              model: fallbackModel,
+              contents: promptParts,
+              config: {
+                responseModalities: ["IMAGE"],
+                imageConfig: {
+                  aspectRatio: "1:1",
+                  imageSize: "2K"
+                }
+              }
+            });
+
+            // El resultado de este modelo viene dentro del candidato como un 'part' de imagen inline
+            const candidate = fallbackResult.candidates?.[0];
+            const imagePart = candidate?.content?.parts?.find(p => p.inlineData);
+
+            if (imagePart && imagePart.inlineData) {
+              return {
+                model: fallbackModel,
+                success: true,
+                data: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`
+              };
+            }
+
+            throw new Error("gemini-3-pro-image-preview no devolvió ninguna imagen generada.");
 
           } else {
-            // Modo generar: usamos generateImages
+            // Modo generar sin imagen base: usamos generateImages de Imagen 3
             result = await ai.models.generateImages({
               model: modelName,
               prompt: prompt.value,
