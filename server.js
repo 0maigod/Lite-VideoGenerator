@@ -2,6 +2,7 @@ const fastify = require('fastify')({ logger: true });
 const path = require('path');
 const fs = require('fs');
 const { GoogleGenAI } = require('@google/genai');
+const { GoogleAuth } = require('google-auth-library');
 require('dotenv').config();
 
 // Configuración de CORS
@@ -35,8 +36,11 @@ function fileToGenerativePart(buffer, mimeType) {
 
 fastify.post('/generate', async (request, reply) => {
   try {
-    const { prompt, images, mask, isEditing } = request.body;
+    const { prompt, images, mask, isEditing, enhancePrompt, aspectRatio, imageSize } = request.body;
     const editingMode = isEditing ? isEditing.value === 'true' : false;
+    const shouldEnhance = enhancePrompt ? enhancePrompt.value === 'true' : false;
+    const ratio = aspectRatio ? aspectRatio.value : '1:1';
+    const resolution = imageSize ? imageSize.value : '2K';
 
     if (!prompt || !prompt.value) {
       return reply.status(400).send({ error: 'Prompt is required' });
@@ -73,46 +77,68 @@ fastify.post('/generate', async (request, reply) => {
         if (modelName.includes('imagen')) {
           let result;
           if (editingMode && baseImage && baseImage._buf) {
-            // Utilizamos el modelo de Imagen para Image-to-Image / Inpainting clásico
-            const editModel = 'imagen-3.0-generate-001';
-            console.log(`Ejecutando edición de imagen con ${editModel}`);
+            const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+            const client = await auth.getClient();
+            const token = await client.getAccessToken();
+            const project = process.env.GOOGLE_CLOUD_PROJECT || await auth.getProjectId();
 
-            const config = {
-              numberOfImages: 1,
-              outputMimeType: "image/jpeg",
-              editMode: "INPAINT_INSERT"
+            const payload = {
+              instances: [
+                {
+                  prompt: prompt.value,
+                  referenceImages: [
+                    {
+                      referenceType: "REFERENCE_TYPE_RAW",
+                      referenceImage: { bytesBase64Encoded: baseImage._buf.toString('base64'), mimeType: baseImage.mimetype || 'image/jpeg' },
+                      referenceId: 1
+                    }
+                  ]
+                }
+              ],
+              parameters: {
+                editMode: "EDIT_MODE_DEFAULT", // Fallback to global Image-to-Image style if no mask is provided
+                numberOfImages: 1,
+                outputMimeType: "image/jpeg"
+              }
             };
 
-            // If a mask was provided from the frontend canvas, apply it
             if (mask && mask.value) {
-              // Remove the "data:image/jpeg;base64," prefix from the string
+              payload.parameters.editMode = "EDIT_MODE_INPAINT_INSERTION"; // Switch to strict regional inpainting because a mask exists
               const maskBase64 = mask.value.replace(/^data:image\/[a-z]+;base64,/, "");
-              config.mask = {
-                mimeType: "image/jpeg",
-                bytes: maskBase64
-              };
+              payload.instances[0].referenceImages.push({
+                referenceType: "REFERENCE_TYPE_MASK",
+                referenceImage: { bytesBase64Encoded: maskBase64, mimeType: "image/jpeg" }, // Note: App.jsx mask is image/jpeg
+                referenceId: 2,
+                maskImageConfig: { maskMode: 'MASK_MODE_USER_PROVIDED' }
+              });
             }
 
-            result = await ai.models.editImage({
-              model: editModel,
-              prompt: prompt.value,
-              referenceImage: {
-                mimeType: image.mimetype,
-                bytes: image._buf.toString('base64')
+            const endpoint = `https://us-central1-aiplatform.googleapis.com/v1/projects/${project}/locations/us-central1/publishers/google/models/imagen-3.0-capability-001:predict`;
+            
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 
+                'Authorization': `Bearer ${token.token}`, 
+                'Content-Type': 'application/json' 
               },
-              config: config
+              body: JSON.stringify(payload)
             });
 
-            const img = result.generatedImages?.[0];
-
-            if (img && img.image) {
-              return {
-                model: editModel,
-                success: true,
-                data: `data:${img.image.mimeType || 'image/jpeg'};base64,${img.image.imageBytes}`
-              };
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error?.message || "Error generating image");
             }
-            throw new Error(`El modelo ${editModel} no devolvió ninguna imagen editada.`);
+
+            const prediction = data.predictions?.[0];
+            if (prediction && prediction.bytesBase64Encoded) {
+              return {
+                model: 'imagen-3.0-generate-001',
+                success: true,
+                data: `data:${prediction.mimeType || 'image/jpeg'};base64,${prediction.bytesBase64Encoded}`
+              };
+            } else {
+              throw new Error("No image was successfully generated");
+            }
 
           } else if (uploadedImages.length > 0) {
             // Generación base pero con referencias. Imagen 3 las ignora, así que usamos 
@@ -126,8 +152,8 @@ fastify.post('/generate', async (request, reply) => {
               config: {
                 responseModalities: ["IMAGE"],
                 imageConfig: {
-                  aspectRatio: "1:1",
-                  imageSize: "2K"
+                  aspectRatio: ratio,
+                  imageSize: resolution
                 }
               }
             });
@@ -153,7 +179,8 @@ fastify.post('/generate', async (request, reply) => {
               prompt: prompt.value,
               config: {
                 numberOfImages: 1,
-                outputMimeType: "image/jpeg"
+                outputMimeType: "image/jpeg",
+                aspectRatio: ratio
               }
             });
 
@@ -180,7 +207,7 @@ fastify.post('/generate', async (request, reply) => {
             model: modelName,
             success: true,
             originalText: text,
-            data: `https://placehold.co/600x400/1e293b/ffffff?text=${encodeURIComponent(text.substring(0, 50))}`
+            isTextOnly: true
           };
         }
       } catch (err) {
@@ -192,15 +219,17 @@ fastify.post('/generate', async (request, reply) => {
       }
     };
 
-    // Run both generations concurrently usando los modelos más capacitados/nuevos
-    const [imagenResult, flashResult] = await Promise.all([
-      generateImage('imagen-3.0-generate-001'),
-      generateImage('gemini-2.5-flash')
-    ]);
+    // Run both generations concurrently usando los modelos más capacitados/nuevos si se requiere
+    const promises = [generateImage('imagen-3.0-generate-001')];
+    if (shouldEnhance) {
+      promises.push(generateImage('gemini-2.5-flash'));
+    }
+
+    const results = await Promise.all(promises);
 
     return {
       success: true,
-      results: [imagenResult, flashResult]
+      results: results
     };
 
   } catch (error) {
