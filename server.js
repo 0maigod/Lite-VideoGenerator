@@ -36,9 +36,10 @@ function fileToGenerativePart(buffer, mimeType) {
 
 fastify.post('/generate', async (request, reply) => {
   try {
-    const { prompt, images, mask, isEditing, enhancePrompt, aspectRatio, imageSize } = request.body;
+    const { prompt, images, mask, isEditing, enhancePrompt, aspectRatio, imageSize, jsonMode } = request.body;
     const editingMode = isEditing ? isEditing.value === 'true' : false;
     const shouldEnhance = enhancePrompt ? enhancePrompt.value === 'true' : false;
+    const isJsonMode = jsonMode ? jsonMode.value === 'true' : false;
     const ratio = aspectRatio ? aspectRatio.value : '1:1';
     const resolution = imageSize ? imageSize.value : '2K';
 
@@ -218,6 +219,35 @@ fastify.post('/generate', async (request, reply) => {
         };
       }
     };
+
+    // JsonMode Intercept: Bypasses standard image generation
+    if (isJsonMode && baseImage && baseImage._buf) {
+      try {
+        const templatePath = path.join(__dirname, 'client', 'public', 'modulos', 'prompt.json');
+        let templateContent = fs.readFileSync(templatePath, 'utf8');
+        
+        const jsonPromptText = `Analiza detalladamente la imagen adjunta y extrae sus atributos visuales para completar una hoja de estilos de prompt. Devuelve estrictamente un objeto JSON que replique las llaves y estructura que te proporciono a continuación, rellenándolas con lo que infieras de la foto.\nEstructura esperada:\n${templateContent}\n\nOpcional instrucción del usuario: ${prompt.value}`;
+
+        const jsonResult = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            fileToGenerativePart(baseImage._buf, baseImage.mimetype),
+            jsonPromptText
+          ],
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+
+        return {
+          success: true,
+          isJsonOnly: true,
+          jsonContent: jsonResult.text || ''
+        };
+      } catch (err) {
+        throw new Error("Error en JsonMode: " + err.message);
+      }
+    }
 
     // Run both generations concurrently usando los modelos más capacitados/nuevos si se requiere
     const promises = [generateImage('imagen-3.0-generate-001')];

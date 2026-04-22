@@ -1,0 +1,133 @@
+{
+    "aspect_ratio": "16: 9",
+    "camera": {
+        "angle": [
+            "eye level",
+            "high angle",
+            "low angle",
+            "bird’s eye view",
+            "dutch angle",
+            "aerial view",
+            "street level view",
+            "landscape",
+            "panoramic",
+            "floor angle",
+            "worm eye view",
+            "nadir",
+            "frontal",
+            "dorsal",
+            "lateral",
+            "semidorsal foreshortening"
+        ],
+        "lens_type": [
+            "standard lens",
+            "wide-angle",
+            "ultra wide-angle",
+            "fisheye",
+            "telephoto lens",
+            "zoom lens"
+        ],
+        "focus": [
+            "depth of field",
+            "shallow focus",
+            "deep focus",
+            "panfocus",
+            "rack focus",
+            "focus pull"
+        ]
+    },
+    "lighting": {
+        "mood": [
+            "natural lighting",
+            "dramatic lighting",
+            "dark lighting",
+            "soft lighting",
+            "accent lighting",
+            "backlight",
+            "blacklight",
+            "blinding light",
+            "lens flare",
+            "anamorphic sparkle effects",
+            "silhouetting",
+            "overexposure/bloom",
+            "bokeh effects",
+            "concert lighting",
+            "crepuscular rays",
+            "direct sunlight",
+            "dusk",
+            "edison bulb",
+            "fire",
+            "fluorescent",
+            "glowing",
+            "glowing radioactively",
+            "glow-stick",
+            "lava glow",
+            "moonlight",
+            "neon lamp",
+            "night club lighting",
+            "nuclear waste glow",
+            "spotlight",
+            "strobe",
+            "sunlight",
+            "ultraviolet."
+        ],
+        "time_of_day": [
+            "late afternoon",
+            "morning",
+            "night"
+        ]
+    },
+    "character": {
+        "description": "Red Tomato",
+        "action": "explosion of elements from tomato, assembling in smooth time-lapse"
+    },
+    "environment": {
+        "location": "Gion district, Kyoto, Japan",
+        "elements": [],
+        "details": "quiet garden transforms into a cozy Italian-style kitchen setting"
+    },
+    "genre": [
+        "sci-fi",
+        "romantic comedy",
+        "action movie",
+        "adventure",
+        "drama",
+        "fantasy",
+        "suspense horror",
+        "suspense",
+        "thriller",
+        "western",
+        "musical",
+        "documentary"
+    ],
+    "style": [
+        "cinematic",
+        "magical realism",
+        "ultra realistic",
+        "studio quality",
+        "analog photo",
+        "polaroid",
+        "film photography",
+        "DSLR",
+        "highly detailed",
+        "grainy",
+        "depth of field"
+    ],
+    "elements": [
+        "tomato on vine (close-up, natural dew)",
+        "bursting tomato with slow-motion red sauce spray",
+        "spaghetti strands forming from swirling mist",
+        "red sauce flowing and coating pasta mid-air",
+        "wooden kitchen table assembling under the plate",
+        "can of crushed tomatoes (modern red-and-white label with 'Can IA' text, no brand name)"
+    ],
+    "keywords": [
+        "tomato",
+        "spaghetti",
+        "product reveal",
+        "magical realism",
+        "cinematic food ad",
+        "red sauce",
+        "Can IA label"
+    ]
+}
